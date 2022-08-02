@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Bot extends TelegramLongPollingBot {
 
     private final ConcurrentHashMap<Integer, Integer> userState = new ConcurrentHashMap<>();
-
+    private int state = 0;
     @Override
     public String getBotUsername() {
         return "EatsFastBot";
@@ -26,22 +26,42 @@ public class Bot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
+        if (update.hasMessage() && update.getMessage().hasText())
+            stateHandler(update);
+    }
 
-        if (update.hasMessage() && update.getMessage().hasText()) {
-            String text = update.getMessage().getText();
-            switch (text) {
-                case "/start":
-                    startupMessage(update);
-                    break;
+    private void stateHandler(Update update){
+        if(this.state == 1)
+            switch (update.getMessage().getText()){
                 case "Add order":
+                    this.state = 2;
                     break;
-                default:
-                    echo(update);
+                case "View order":
+                    this.state = 5;
+                    break;
             }
+        if(update.getMessage().getText() == "/start")
+            this.state = 1;
+        switch (state){
+            case 1:
+                startupMessage(update);
+                break;
+            case 2:
+                getOrder();
+                break;
+            case 3:
+                addOrder(update);
+                break;
+            case 4:
+                notifyCouriers();
+                break;
+            case 5:
+                viewOrder(update);
+                break;
         }
 
     }
-
+    //state 1
     private void startupMessage(Update update) {
         //build message
         SendMessage message = new SendMessage();
@@ -49,14 +69,17 @@ public class Bot extends TelegramLongPollingBot {
         message.setText("Welcome!");
 
         //build keyboard
+        //buttons
         KeyboardButton buttonOrder = new KeyboardButton("Add order");
-        KeyboardButton buttonViewOrders = new KeyboardButton("View Orders");
+        KeyboardButton buttonViewOrders = new KeyboardButton("View orders");
+        //row
         KeyboardRow row = new KeyboardRow();
         row.add(buttonOrder);
         row.add(buttonViewOrders);
-        List<KeyboardRow> l = Collections.singletonList(row);
+        //keyboard
+        List<KeyboardRow> list = Collections.singletonList(row);
         ReplyKeyboardMarkup startMessageRKM = new ReplyKeyboardMarkup();
-        startMessageRKM.setKeyboard(l);
+        startMessageRKM.setKeyboard(list);
         startMessageRKM.setInputFieldPlaceholder("Placeholder");
         startMessageRKM.setOneTimeKeyboard(true);
         message.setReplyMarkup(startMessageRKM);
@@ -69,16 +92,49 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    private void getOrder(Update update) {
+    //state 2
+    private void getOrder() {
         SendMessage message = new SendMessage();
         message.setText("Writing down your order...");
+        try{
+            execute(message);
+            this.state = 3;
+        } catch (TelegramApiException e){
+            e.printStackTrace();
+        }
+    }
+
+    //state 3
+    private void addOrder(Update update) {
+        String order = update.getMessage().getText();
+        /*TODO
+            connect to db and add order to orders table
+         */
+        SendMessage message = new SendMessage();
+        message.setText("Order added.");
+        try{
+            execute(message);
+            this.state = 4;
+        } catch (TelegramApiException e){
+            e.printStackTrace();
+        }
+    }
+
+    //state 4
+    private void notifyCouriers() {
+        /*TODO
+            notify method
+         */
+        this.state = 1;
+    }
+
+    //state 5
+    private void viewOrder(Update update){
 
     }
 
-    private void addOrder(Update update){
 
-    }
-
+    //echo
     private void echo(Update update) {
         // We check if the update has a message and the message has text
         SendMessage message = new SendMessage(); // Create a SendMessage object with mandatory fields

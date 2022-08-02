@@ -43,6 +43,12 @@ public class CreateTables {
         alter table orders
 	        add constraint orders_pk
 		        primary key (order_id);
+
+	    alter table orders
+	        add time timestamp with time zone default now() not null;
+
+        alter table orders
+	        add status int default 0 not null;
          */
         return false;
     }
