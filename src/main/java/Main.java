@@ -1,8 +1,8 @@
+import Database.HerokuConnection;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
-import java.net.URISyntaxException;
 import java.sql.Connection;
 import java.sql.SQLException;
 
@@ -18,10 +18,7 @@ public class Main {
             e.printStackTrace();
         }
 
-
-
-/*
-        try(Connection conn = DBConnection.getConnection()){
+        try(Connection conn = HerokuConnection.getConnection()){
 
             if(conn != null)
                 System.out.println("Connected");
@@ -31,6 +28,6 @@ public class Main {
         } catch (Exception e) {
             e.printStackTrace();
         }
- */
+
     }
 }

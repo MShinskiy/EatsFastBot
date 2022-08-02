@@ -1,10 +1,12 @@
+package Database;
+
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 
-public class DBConnection {
+public class HerokuConnection {
     public static Connection getConnection() throws URISyntaxException, SQLException {
         URI dbUri = new URI(System.getenv("DATABASE_URL"));
 
@@ -15,8 +17,9 @@ public class DBConnection {
         return DriverManager.getConnection(dbUrl, username, password);
     }
 
-    public static void connect() throws SQLException, URISyntaxException {
+    public static boolean addOrderToDB(HerokuConnection conn) {
 
-
+        return false;
     }
+
 }
