@@ -11,6 +11,8 @@ import java.util.*;
 public class Bot extends TelegramLongPollingBot {
 
     private int state = 0;
+    private int newPrice = 0;
+    private int orderId = 0;
 
     @Override
     public String getBotUsername() {
@@ -42,6 +44,9 @@ public class Bot extends TelegramLongPollingBot {
                 case "View orders":
                     this.state = 4;
                     break;
+                case "Change price":
+                    this.state = 6;
+                    break;
             }
         else if(this.state == 5)
             switch (update.getMessage().getText()) {
@@ -55,11 +60,16 @@ public class Bot extends TelegramLongPollingBot {
                     viewUncheckedOrders(update);
                     break;
             }
+        else if(this.state == 7)
+            newPrice = Integer.parseInt(update.getMessage().getText());
+        else if(this.state == 8)
+            orderId = Integer.parseInt(update.getMessage().getText());
 
         switch (this.state) {
             case 2:
-                getOrder(update);
+                getOrders(update);
                 break;
+
             case 3:
                 addOrder(update);
                 break;
@@ -69,8 +79,17 @@ public class Bot extends TelegramLongPollingBot {
             case 5:
                 showOrdersMessage(update);
                 break;
+            case 6:
+                getOrderId(update);
+                break;
+            case 7:
+                getNewPrice(update);
+                break;
+            case 8:
+                updatePrice(update, this.orderId, this.newPrice);
+                showNewPriceMessage(update);
+                break;
         }
-
     }
 
     //state 1
@@ -78,8 +97,8 @@ public class Bot extends TelegramLongPollingBot {
         sendMessageForState1(update, "Welcome!");
     }
 
-    //state 2
-    private void getOrder(Update update) {
+    //state 2 -> 3
+    private void getOrders(Update update) {
         SendMessage message = new SendMessage();
         message.setChatId(update.getMessage().getChatId().toString());
         message.setText("Writing down your order...");
@@ -91,7 +110,7 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    //state 3
+    //state 3 -> 1
     private void addOrder(Update update) {
         String order = update.getMessage().getText();
         /*
@@ -109,7 +128,7 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    //state 4
+    //state 4 -> 5
     private void viewOrder(Update update) {
         //build message
         SendMessage message = new SendMessage();
@@ -139,9 +158,41 @@ public class Bot extends TelegramLongPollingBot {
 
     }
 
-    //state 5
+    //state 5 -> 1
     private void showOrdersMessage(Update update) {
         sendMessageForState1(update, "Your orders.");
+    }
+
+    //state 6 -> 7
+    private void getOrderId(Update update) {
+        SendMessage message = new SendMessage();
+        message.setChatId(update.getMessage().getChatId().toString());
+        message.setText("Enter order id:");
+
+        try{
+            execute(message);
+            this.state = 7;
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    //state 7 -> 8
+    private void getNewPrice(Update update) {
+        SendMessage message = new SendMessage();
+        message.setChatId(update.getMessage().getChatId().toString());
+        message.setText("Enter new price:");
+
+        try{
+            execute(message);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    //state 8 -> 1
+    private void showNewPriceMessage(Update update){
+        sendMessageForState1(update, "Price updated");
     }
 
     //Support methods=======================================================
@@ -153,15 +204,11 @@ public class Bot extends TelegramLongPollingBot {
         message.setChatId(update.getMessage().getChatId().toString());
 
         //build keyboard
-        //buttons
-        KeyboardButton buttonOrder = new KeyboardButton("Add order");
-        KeyboardButton buttonViewOrders = new KeyboardButton("View orders");
-        //row
-        KeyboardRow row = new KeyboardRow();
-        row.add(buttonOrder);
-        row.add(buttonViewOrders);
-        //keyboard
-        List<KeyboardRow> list = Collections.singletonList(row);
+        List<KeyboardRow> list = Arrays.asList(
+                new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("Add order")))),
+                new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("View orders")))),
+                new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("Change price"))))
+        );
         ReplyKeyboardMarkup startMessageRKM = new ReplyKeyboardMarkup();
         startMessageRKM.setKeyboard(list);
         startMessageRKM.setInputFieldPlaceholder("Placeholder");
@@ -230,6 +277,14 @@ public class Bot extends TelegramLongPollingBot {
             notify method
          */
         sendMessageForState1(update, "Couriers notified!");
+    }
+
+    //update price in db
+    private void updatePrice(Update update, int orderId, int newPrice){
+        /*
+        TODO
+            updatePrice method
+         */
     }
 
     //echo
