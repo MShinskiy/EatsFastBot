@@ -1,3 +1,4 @@
+import org.apache.commons.dbcp2.BasicDataSource;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
@@ -6,6 +7,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.sql.SQLException;
 import java.util.*;
 
 public class Bot extends TelegramLongPollingBot {
@@ -13,6 +15,13 @@ public class Bot extends TelegramLongPollingBot {
     private int state = 0;
     private int newPrice = 0;
     private int orderId = 0;
+    private BasicDataSource connectionPool;
+
+    public Bot(BasicDataSource connectionPool){
+        this.connectionPool = connectionPool;
+        int idle = connectionPool.getNumIdle();
+        System.out.println("Idle connections: " + idle);
+    }
 
     @Override
     public String getBotUsername() {
@@ -48,6 +57,7 @@ public class Bot extends TelegramLongPollingBot {
                     this.state = 6;
                     break;
             }
+
         else if(this.state == 5)
             switch (update.getMessage().getText()) {
                 case "Today's orders":
@@ -60,16 +70,27 @@ public class Bot extends TelegramLongPollingBot {
                     viewUncheckedOrders(update);
                     break;
             }
+
         else if(this.state == 7)
-            newPrice = Integer.parseInt(update.getMessage().getText());
+            if(isValidId(update))
+                orderId = Integer.parseInt(update.getMessage().getText());
+            else {
+                sendInvalidInputMessage(update, "Invalid id.");
+                return;
+            }
+
         else if(this.state == 8)
-            orderId = Integer.parseInt(update.getMessage().getText());
+            if (isValidPrice(update))
+                newPrice = Integer.parseInt(update.getMessage().getText());
+            else {
+                sendInvalidInputMessage(update, "Invalid price.");
+                return;
+            }
 
         switch (this.state) {
             case 2:
                 getOrders(update);
                 break;
-
             case 3:
                 addOrder(update);
                 break;
@@ -80,10 +101,10 @@ public class Bot extends TelegramLongPollingBot {
                 showOrdersMessage(update);
                 break;
             case 6:
-                getOrderId(update);
+                askOrderId(update);
                 break;
             case 7:
-                getNewPrice(update);
+                askNewPrice(update);
                 break;
             case 8:
                 updatePrice(update, this.orderId, this.newPrice);
@@ -111,18 +132,27 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //state 3 -> 1
-    private void addOrder(Update update) {
+    private void addOrder(Update update){
         String order = update.getMessage().getText();
-        /*
-        TODO
-            connect to db and add order to orders table
-         */
+        boolean success = false;
+        try {
+            long s = System.currentTimeMillis();
+            success = Database.InsertTables.insertNewOrder(connectionPool.getConnection(), order);
+            System.out.println("Added in: "  + (System.currentTimeMillis() - s));
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+        }
         SendMessage message = new SendMessage();
         message.setChatId(update.getMessage().getChatId().toString());
-        message.setText("Order added.");
+        if(success)
+            message.setText("Order added.");
+        else
+            message.setText("Something went wrong.");
+
         try {
             execute(message);
-            notifyCouriers(update);
+            if(success)
+                notifyCouriers(update);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -164,7 +194,7 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //state 6 -> 7
-    private void getOrderId(Update update) {
+    private void askOrderId(Update update) {
         SendMessage message = new SendMessage();
         message.setChatId(update.getMessage().getChatId().toString());
         message.setText("Enter order id:");
@@ -178,13 +208,14 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //state 7 -> 8
-    private void getNewPrice(Update update) {
+    private void askNewPrice(Update update) {
         SendMessage message = new SendMessage();
         message.setChatId(update.getMessage().getChatId().toString());
         message.setText("Enter new price:");
 
         try{
             execute(message);
+            this.state = 8;
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -192,7 +223,7 @@ public class Bot extends TelegramLongPollingBot {
 
     //state 8 -> 1
     private void showNewPriceMessage(Update update){
-        sendMessageForState1(update, "Price updated");
+        sendMessageForState1(update, "Price updated. Price: " + newPrice + " ID: " + orderId);
     }
 
     //Support methods=======================================================
@@ -219,6 +250,20 @@ public class Bot extends TelegramLongPollingBot {
         try {
             execute(message);
             this.state = 1;
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void sendInvalidInputMessage(Update update, String messageText) {
+        //build message
+        SendMessage message = new SendMessage();
+        message.setText(messageText);
+        message.setChatId(update.getMessage().getChatId().toString());
+
+        //execute message
+        try {
+            execute(message);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -286,6 +331,30 @@ public class Bot extends TelegramLongPollingBot {
             updatePrice method
          */
     }
+
+    //input validation methods----------------------------------------------
+    private boolean isValidPrice(Update update){
+        try{
+            Integer.parseInt(update.getMessage().getText());
+            return true;
+        } catch (NumberFormatException e){
+            return false;
+        }
+    }
+
+    private boolean isValidId(Update update){
+        try{
+            Integer.parseInt(update.getMessage().getText());
+            /*
+            TODO
+                check if is in the orders table
+             */
+            return true;
+        } catch (NumberFormatException e){
+            return false;
+        }
+    }
+    //----------------------------------------------------------------------
 
     //echo
     private void echo(Update update) {
