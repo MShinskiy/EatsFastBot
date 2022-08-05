@@ -2,7 +2,7 @@ package Database;
 
 import java.sql.Connection;
 
-public class CreateTables {
+public class Create {
 
     public static boolean createTableCouriers(Connection conn) {
         /*

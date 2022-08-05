@@ -1,3 +1,4 @@
+import Database.*;
 import org.apache.commons.dbcp2.BasicDataSource;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -10,17 +11,18 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.sql.SQLException;
 import java.util.*;
 
+
 public class Bot extends TelegramLongPollingBot {
 
     private int state = 0;
     private int newPrice = 0;
     private int orderId = 0;
-    private BasicDataSource connectionPool;
+    //K - user, V - state
+    private final HashMap<Courier, Integer> usersState = new HashMap<>();
+    private final BasicDataSource connectionPool;
 
     public Bot(BasicDataSource connectionPool){
         this.connectionPool = connectionPool;
-        int idle = connectionPool.getNumIdle();
-        System.out.println("Idle connections: " + idle);
     }
 
     @Override
@@ -35,14 +37,63 @@ public class Bot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        if (update.hasMessage() && update.getMessage().hasText()) {
+        if(usersState.isEmpty() || !isRegistered(update.getMessage().getChatId()) )
+            registrationHandler(update);
+        else if (update.hasMessage() && update.getMessage().hasText()) {
             System.out.println("Message received: " + update.getMessage().getText());
             stateHandler(update);
             System.out.println("Message answered, current state = " + state);
         }
     }
 
+    //do registration for a courier
+    private void registrationHandler(Update update) {
+        Courier courier = new Courier(
+                update.getMessage().getChatId(),
+                update.getMessage().getChat().getUserName(),
+                update.getMessage().getChat().getUserName(),
+                Privilege.COURIER);
+
+        usersState.put(courier, 0);
+        try{
+            if(!Select.isInCourierTable(connectionPool.getConnection(), courier.getChatId()))
+                Insert.insertCourier(
+                        connectionPool.getConnection(),
+                        courier.getName(),
+                        courier.getUsername(),
+                        courier.getPrivilege().toString(),
+                        courier.getChatId()
+                );
+        } catch (SQLException sqlE){
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+        }
+    }
+
+    //check registration
+    private boolean isRegistered(long chatId) {
+        for (Courier user : usersState.keySet()) {
+            if(user.getChatId() == chatId)
+                return true;
+        }
+        for(Courier user : usersState.keySet())
+            try {
+                if (Select.isInCourierTable(connectionPool.getConnection(), user.getChatId()))
+                    return true;
+            } catch (SQLException sqlE ){
+                System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+                sqlE.printStackTrace();
+            }
+        return false;
+    }
+
+
+
+    //handle users states
     private void stateHandler(Update update) {
+        long state = update.getMessage().getChatId();
+        System.out.println(update.getMessage().getChat().getUserName());
+        System.out.println(state);
         if (Objects.equals(update.getMessage().getText(), "/start"))
             startupMessage(update);
         if (this.state == 1)
@@ -60,8 +111,8 @@ public class Bot extends TelegramLongPollingBot {
 
         else if(this.state == 5)
             switch (update.getMessage().getText()) {
-                case "Today's orders":
-                    viewTodayOrders(update);
+                case "All orders":
+                    viewAllOrders(update);
                     break;
                 case "My orders":
                     viewMyOrders(update);
@@ -107,8 +158,8 @@ public class Bot extends TelegramLongPollingBot {
                 askNewPrice(update);
                 break;
             case 8:
-                updatePrice(update, this.orderId, this.newPrice);
-                showNewPriceMessage(update);
+                boolean success = updatePrice(update, this.orderId, this.newPrice);
+                showNewPriceMessage(update, success);
                 break;
         }
     }
@@ -137,7 +188,7 @@ public class Bot extends TelegramLongPollingBot {
         boolean success = false;
         try {
             long s = System.currentTimeMillis();
-            success = Database.InsertTables.insertNewOrder(connectionPool.getConnection(), order);
+            success = Insert.insertNewOrder(connectionPool.getConnection(), order);
             System.out.println("Added in: "  + (System.currentTimeMillis() - s));
         } catch (SQLException sqlE) {
             System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
@@ -167,7 +218,7 @@ public class Bot extends TelegramLongPollingBot {
 
         //build keyboard
         List<KeyboardRow> list = Arrays.asList(
-                new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("Today's orders")))),
+                new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("All orders")))),
                 new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("My orders")))),
                 new KeyboardRow(new ArrayList<>(Collections.singletonList(new KeyboardButton("Unchecked orders"))))
         );
@@ -222,8 +273,14 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //state 8 -> 1
-    private void showNewPriceMessage(Update update){
-        sendMessageForState1(update, "Price updated. Price: " + newPrice + " ID: " + orderId);
+    private void showNewPriceMessage(Update update, boolean updateSuccess){
+        String message;
+        if (updateSuccess)
+            message = "Price updated. Price: " + newPrice + " ID: " + orderId;
+        else
+            message = "Something went wrong when updating price";
+
+        sendMessageForState1(update, message);
     }
 
     //Support methods=======================================================
@@ -270,18 +327,29 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //view orders methods---------------------------------------------------
-    private void viewTodayOrders(Update update) {
-        /*
-        TODO
-            Show list of today's orders
-         */
-        SendMessage message = new SendMessage();
-        message.setChatId(update.getMessage().getChatId().toString());
-        message.setText("Today's orders.");
-        try{
-            execute(message);
-        } catch (TelegramApiException e) {
-            e.printStackTrace();
+    private void viewAllOrders(Update update) {
+        List<String> orders = new ArrayList<>();
+        try {
+            //get orders from db
+            orders = Select.selectAllOrders(connectionPool.getConnection());
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+        }
+
+        //send each order as a message
+        for (String order : orders) {
+            SendMessage message = new SendMessage();
+            message.setChatId(update.getMessage().getChatId().toString());
+            //if (!order.equals(""))
+                message.setText(order);
+            //else
+            //    continue;
+            try {
+                execute(message);
+            } catch (TelegramApiException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -325,11 +393,14 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //update price in db
-    private void updatePrice(Update update, int orderId, int newPrice){
-        /*
-        TODO
-            updatePrice method
-         */
+    private boolean updatePrice(Update update, int orderId, int newPrice){
+        try {
+            return Database.Update.updatePrice(connectionPool.getConnection(), orderId, newPrice);
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+            return false;
+        }
     }
 
     //input validation methods----------------------------------------------
@@ -344,13 +415,9 @@ public class Bot extends TelegramLongPollingBot {
 
     private boolean isValidId(Update update){
         try{
-            Integer.parseInt(update.getMessage().getText());
-            /*
-            TODO
-                check if is in the orders table
-             */
-            return true;
-        } catch (NumberFormatException e){
+            long id = Long.parseLong(update.getMessage().getText());
+            return Select.isIdInOrderTable(connectionPool.getConnection(), id);
+        } catch (NumberFormatException | SQLException e){
             return false;
         }
     }
