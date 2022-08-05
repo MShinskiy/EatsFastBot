@@ -13,12 +13,10 @@ import java.util.*;
 
 
 public class Bot extends TelegramLongPollingBot {
-
-    private int state = 0;
     private int newPrice = 0;
     private int orderId = 0;
     //K - user, V - state
-    private final HashMap<Courier, Integer> usersState = new HashMap<>();
+    private final HashMap<Long, Integer> usersState = new HashMap<>();
     private final BasicDataSource connectionPool;
 
     public Bot(BasicDataSource connectionPool){
@@ -42,7 +40,7 @@ public class Bot extends TelegramLongPollingBot {
         else if (update.hasMessage() && update.getMessage().hasText()) {
             System.out.println("Message received: " + update.getMessage().getText());
             stateHandler(update);
-            System.out.println("Message answered, current state = " + state);
+            System.out.println("Message answered.");
         }
     }
 
@@ -54,31 +52,40 @@ public class Bot extends TelegramLongPollingBot {
                 update.getMessage().getChat().getUserName(),
                 Privilege.COURIER);
 
-        usersState.put(courier, 0);
+        usersState.put(courier.getChatId(), 0);
         try{
             if(!Select.isInCourierTable(connectionPool.getConnection(), courier.getChatId()))
                 Insert.insertCourier(
                         connectionPool.getConnection(),
                         courier.getName(),
                         courier.getUsername(),
-                        courier.getPrivilege().toString(),
+                        courier.getPrivilege().name(),
                         courier.getChatId()
                 );
         } catch (SQLException sqlE){
             System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
             sqlE.printStackTrace();
         }
+
+        SendMessage message = new SendMessage();
+        message.setChatId(update.getMessage().getChatId());
+        message.setText("Got you registered!\nType /start to continue.");
+        try{
+            execute(message);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
     }
 
     //check registration
     private boolean isRegistered(long chatId) {
-        for (Courier user : usersState.keySet()) {
-            if(user.getChatId() == chatId)
+        for (Long id : usersState.keySet()) {
+            if(id == chatId)
                 return true;
         }
-        for(Courier user : usersState.keySet())
+        for(Long id : usersState.keySet())
             try {
-                if (Select.isInCourierTable(connectionPool.getConnection(), user.getChatId()))
+                if (Select.isInCourierTable(connectionPool.getConnection(), id))
                     return true;
             } catch (SQLException sqlE ){
                 System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
@@ -87,29 +94,27 @@ public class Bot extends TelegramLongPollingBot {
         return false;
     }
 
-
-
     //handle users states
     private void stateHandler(Update update) {
-        long state = update.getMessage().getChatId();
+        int state = usersState.get(update.getMessage().getChatId());
         System.out.println(update.getMessage().getChat().getUserName());
         System.out.println(state);
         if (Objects.equals(update.getMessage().getText(), "/start"))
             startupMessage(update);
-        if (this.state == 1)
+        if (state == 1)
             switch (update.getMessage().getText()) {
                 case "Add order":
-                    this.state = 2;
+                    state = 2;
                     break;
                 case "View orders":
-                    this.state = 4;
+                    state = 4;
                     break;
                 case "Change price":
-                    this.state = 6;
+                    state = 6;
                     break;
             }
 
-        else if(this.state == 5)
+        else if(state == 5)
             switch (update.getMessage().getText()) {
                 case "All orders":
                     viewAllOrders(update);
@@ -122,7 +127,7 @@ public class Bot extends TelegramLongPollingBot {
                     break;
             }
 
-        else if(this.state == 7)
+        else if(state == 7)
             if(isValidId(update))
                 orderId = Integer.parseInt(update.getMessage().getText());
             else {
@@ -130,7 +135,7 @@ public class Bot extends TelegramLongPollingBot {
                 return;
             }
 
-        else if(this.state == 8)
+        else if(state == 8)
             if (isValidPrice(update))
                 newPrice = Integer.parseInt(update.getMessage().getText());
             else {
@@ -138,7 +143,7 @@ public class Bot extends TelegramLongPollingBot {
                 return;
             }
 
-        switch (this.state) {
+        switch (state) {
             case 2:
                 getOrders(update);
                 break;
@@ -176,7 +181,7 @@ public class Bot extends TelegramLongPollingBot {
         message.setText("Writing down your order...");
         try {
             execute(message);
-            this.state = 3;
+            usersState.replace(update.getMessage().getChatId(), 3);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -232,7 +237,7 @@ public class Bot extends TelegramLongPollingBot {
         //execute message
         try{
             execute(message);
-            this.state = 5;
+            usersState.replace(update.getMessage().getChatId(), 5);
         } catch (TelegramApiException e){
             e.printStackTrace();
         }
@@ -252,7 +257,7 @@ public class Bot extends TelegramLongPollingBot {
 
         try{
             execute(message);
-            this.state = 7;
+            usersState.replace(update.getMessage().getChatId(), 7);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -266,7 +271,7 @@ public class Bot extends TelegramLongPollingBot {
 
         try{
             execute(message);
-            this.state = 8;
+            usersState.replace(update.getMessage().getChatId(), 8);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -306,7 +311,7 @@ public class Bot extends TelegramLongPollingBot {
         //execute message
         try {
             execute(message);
-            this.state = 1;
+            usersState.replace(update.getMessage().getChatId(), 1);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
