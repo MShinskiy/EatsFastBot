@@ -32,19 +32,29 @@ public class Select {
         return orders;
     }
 
+    public static List<Long> selectAllCouriers (Connection herokuConn) {
+        String selectQuery =
+                "SELECT chat_id " +
+                "FROM couriers;";
+        List<Long> ids = new ArrayList<>();
+        try (Statement stmt = herokuConn.createStatement()){
+            ResultSet rs = stmt.executeQuery(selectQuery);
+            while(rs.next())
+                ids.add(rs.getLong(1));
+
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+        }
+        return ids;
+    }
+
     public static boolean isIdInOrderTable(Connection herokuConn, long id){
         String selectQuery =
                 "SELECT * " +
                 "FROM orders " +
                 "WHERE order_id = " + id + ";";
-        try (Statement stmt = herokuConn.createStatement()) {
-            ResultSet rs = stmt.executeQuery(selectQuery);
-            return rs.next();
-        } catch (SQLException sqlE) {
-            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
-            sqlE.printStackTrace();
-        }
-        return false;
+        return executeIsInTableSelectQuery(herokuConn, selectQuery);
     }
 
     public static boolean isInCourierTable(Connection herokuConn, long chat_id) {
@@ -52,7 +62,11 @@ public class Select {
                 "SELECT * " +
                 "FROM couriers " +
                 "WHERE chat_id = " + chat_id + ";";
-        try(Statement stmt = herokuConn.createStatement()) {
+        return executeIsInTableSelectQuery(herokuConn, selectQuery);
+    }
+
+    private static boolean executeIsInTableSelectQuery(Connection herokuConn, String selectQuery) {
+        try (Statement stmt = herokuConn.createStatement()) {
             ResultSet rs = stmt.executeQuery(selectQuery);
             return rs.next();
         } catch (SQLException sqlE) {

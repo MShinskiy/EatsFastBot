@@ -3,7 +3,9 @@ import org.apache.commons.dbcp2.BasicDataSource;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
@@ -17,6 +19,7 @@ public class Bot extends TelegramLongPollingBot {
     private int orderId = 0;
     //K - user, V - state
     private final HashMap<Long, Integer> usersState = new HashMap<>();
+    private final HashMap<Long, Courier> userInfo = new HashMap<>();
     private final BasicDataSource connectionPool;
 
     public Bot(BasicDataSource connectionPool){
@@ -53,6 +56,8 @@ public class Bot extends TelegramLongPollingBot {
                 Privilege.COURIER);
 
         usersState.put(courier.getChatId(), 0);
+        userInfo.put(courier.getChatId(), courier);
+
         try{
             if(!Select.isInCourierTable(connectionPool.getConnection(), courier.getChatId()))
                 Insert.insertCourier(
@@ -79,19 +84,7 @@ public class Bot extends TelegramLongPollingBot {
 
     //check registration
     private boolean isRegistered(long chatId) {
-        for (Long id : usersState.keySet()) {
-            if(id == chatId)
-                return true;
-        }
-        for(Long id : usersState.keySet())
-            try {
-                if (Select.isInCourierTable(connectionPool.getConnection(), id))
-                    return true;
-            } catch (SQLException sqlE ){
-                System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
-                sqlE.printStackTrace();
-            }
-        return false;
+        return usersState.containsKey(chatId);
     }
 
     //handle users states
@@ -208,7 +201,7 @@ public class Bot extends TelegramLongPollingBot {
         try {
             execute(message);
             if(success)
-                notifyCouriers(update);
+                notifyCouriers(update, order);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -346,10 +339,7 @@ public class Bot extends TelegramLongPollingBot {
         for (String order : orders) {
             SendMessage message = new SendMessage();
             message.setChatId(update.getMessage().getChatId().toString());
-            //if (!order.equals(""))
-                message.setText(order);
-            //else
-            //    continue;
+            message.setText(order);
             try {
                 execute(message);
             } catch (TelegramApiException e) {
@@ -389,11 +379,40 @@ public class Bot extends TelegramLongPollingBot {
     //----------------------------------------------------------------------
 
     //Notifying couriers that new order has been placed
-    private void notifyCouriers(Update update) {
-        /*
-        TODO
-            notify method
-         */
+    private void notifyCouriers(Update update, String order) {
+        List<Long> ids = new ArrayList<>();
+        try {
+            ids = Select.selectAllCouriers(connectionPool.getConnection());
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+            sendInvalidInputMessage(update, "Something went wrong");
+        }
+        for(Long id : ids) {
+            try {
+                //build message
+                SendMessage message = new SendMessage();
+                message.setChatId(id);
+                message.setText("New order:\n" + order);
+
+                //build keyboard
+                InlineKeyboardMarkup ikm = new InlineKeyboardMarkup();
+                List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+                List<InlineKeyboardButton> buttons = new ArrayList<>();
+                InlineKeyboardButton butt = new InlineKeyboardButton();
+                butt.setText("Take");
+                butt.setCallbackData("order:take");
+                buttons.add(butt);
+                rows.add(buttons);
+                ikm.setKeyboard(rows);
+                message.setReplyMarkup(ikm);
+
+                //execute
+                execute(message);
+            } catch (TelegramApiException e) {
+                e.printStackTrace();
+            }
+        }
         sendMessageForState1(update, "Couriers notified!");
     }
 

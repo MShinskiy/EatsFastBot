@@ -10,6 +10,7 @@ public class Courier {
         this.chatId = chatId;
         this.name = name;
         this.privilege = privilege;
+        this.username = username;
     }
 
     //getters
