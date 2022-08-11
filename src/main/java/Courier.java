@@ -23,7 +23,7 @@ public class Courier {
     }
 
     public String getUsername() {
-        return name;
+        return username;
     }
 
     public String getName() {
@@ -40,7 +40,7 @@ public class Courier {
     }
 
     public void setUsername(String username) {
-        this.name = username;
+        this.username = username;
     }
 
     public void setName(String name) {
@@ -58,5 +58,13 @@ public class Courier {
     @Override
     public int hashCode() {
         return Objects.hash(chatId, name, username, privilege);
+    }
+
+    @Override
+    public String toString() {
+        return "Name: " + name + "\n" +
+                "Username: " + username + "\n" +
+                "Chat Id: " + chatId + "\n" +
+                "Rights: " + privilege.name() + "\n";
     }
 }

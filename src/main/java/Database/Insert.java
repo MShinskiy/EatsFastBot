@@ -1,8 +1,6 @@
 package Database;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
+import java.sql.*;
 
 
 public class Insert {
@@ -25,21 +23,28 @@ public class Insert {
         return row > -1;
     }
 
-    public static boolean insertNewOrder(Connection herokuConn, String orderText) {
+    public static long insertNewOrder(Connection herokuConn, String orderText) {
         String insertString =
                 "INSERT INTO orders (order_text) " +
                 "VALUES(?);";
-        int row = -1;
-        try (PreparedStatement ps = herokuConn.prepareStatement(insertString)) {
+        long key = 0;
+        try (PreparedStatement ps =
+                     herokuConn.prepareStatement(insertString, Statement.RETURN_GENERATED_KEYS)) {
 
             ps.setString(1, orderText);
-            row = ps.executeUpdate();
+            ps.executeUpdate();
 
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if(keys.next()) {
+                    key = keys.getLong(1);
+                }
+            }
         } catch (SQLException sqlE) {
             System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
             sqlE.printStackTrace();
         }
-        return row > -1;
+
+        return key;
     }
 
 

@@ -1,7 +1,10 @@
 import Database.*;
 import org.apache.commons.dbcp2.BasicDataSource;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
+import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
@@ -21,8 +24,11 @@ public class Bot extends TelegramLongPollingBot {
     private final HashMap<Long, Integer> usersState = new HashMap<>();
     private final HashMap<Long, Courier> userInfo = new HashMap<>();
     private final BasicDataSource connectionPool;
+    private static final int STATUS_UNASSIGNED = 0;
+    private static final int STATUS_TAKEN = 1;
+    private static final int STATUS_COMPLETE = 2;
 
-    public Bot(BasicDataSource connectionPool){
+    public Bot(BasicDataSource connectionPool) {
         this.connectionPool = connectionPool;
     }
 
@@ -38,17 +44,29 @@ public class Bot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        if(usersState.isEmpty() || !isRegistered(update.getMessage().getChatId()) )
-            registrationHandler(update);
+        if (update.hasCallbackQuery())
+            callbackHandler(update);
         else if (update.hasMessage() && update.getMessage().hasText()) {
-            System.out.println("Message received: " + update.getMessage().getText());
-            stateHandler(update);
-            System.out.println("Message answered.");
+            if (usersState.isEmpty() || !isRegistered(update.getMessage().getChatId()))
+                registrationHandler(update);
+            else
+                stateHandler(update);
         }
     }
 
     //do registration for a courier
     private void registrationHandler(Update update) {
+        if (update.getMessage().getFrom().getUserName() == null) {
+            SendMessage message = new SendMessage();
+            message.setText("First create your telegram username!");
+            message.setChatId(update.getMessage().getChatId());
+            try {
+                execute(message);
+            } catch (TelegramApiException e) {
+                e.printStackTrace();
+            }
+        }
+
         Courier courier = new Courier(
                 update.getMessage().getChatId(),
                 update.getMessage().getChat().getUserName(),
@@ -58,8 +76,8 @@ public class Bot extends TelegramLongPollingBot {
         usersState.put(courier.getChatId(), 0);
         userInfo.put(courier.getChatId(), courier);
 
-        try{
-            if(!Select.isInCourierTable(connectionPool.getConnection(), courier.getChatId()))
+        try {
+            if (!Select.isInCourierTable(connectionPool.getConnection(), courier.getChatId()))
                 Insert.insertCourier(
                         connectionPool.getConnection(),
                         courier.getName(),
@@ -67,15 +85,17 @@ public class Bot extends TelegramLongPollingBot {
                         courier.getPrivilege().name(),
                         courier.getChatId()
                 );
-        } catch (SQLException sqlE){
+        } catch (SQLException sqlE) {
             System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
             sqlE.printStackTrace();
         }
 
         SendMessage message = new SendMessage();
         message.setChatId(update.getMessage().getChatId());
-        message.setText("Got you registered!\nType /start to continue.");
-        try{
+        message.setText("Got you registered!\n"
+                + courier +
+                "\nType /start to continue.");
+        try {
             execute(message);
         } catch (TelegramApiException e) {
             e.printStackTrace();
@@ -87,8 +107,74 @@ public class Bot extends TelegramLongPollingBot {
         return usersState.containsKey(chatId);
     }
 
+    //handle callback to add price and accept order
+    private void callbackHandler(Update update) {
+        CallbackQuery callbackQuery = update.getCallbackQuery();
+        String[] data = callbackQuery.getData().split(":");
+        long orderId = Long.parseLong(data[2]);
+        if (data[0].equals("order")) {
+            if (data[1].equals("price")) {
+                this.orderId = (int) orderId;
+                askNewPrice(update);
+            } else if (data[1].equals("take")) {
+                int price = -1;
+                boolean isOrderTaken = false;
+                try {
+                    price = Select.selectOrderPrice(connectionPool.getConnection(), orderId);
+                    isOrderTaken = Select.isOrderCourierAssigned(connectionPool.getConnection(), orderId);
+                } catch (SQLException sqlE) {
+                    System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+                    sqlE.printStackTrace();
+                }
+                if (price <= 0) {
+                    AnswerCallbackQuery answerCallbackQuery = new AnswerCallbackQuery();
+                    answerCallbackQuery.setCallbackQueryId(callbackQuery.getId());
+                    answerCallbackQuery.setText("Enter price first!");
+                    answerCallbackQuery.setShowAlert(true);
+                    try {
+                        execute(answerCallbackQuery);
+                    } catch (TelegramApiException e) {
+                        e.printStackTrace();
+                    }
+                } else if (isOrderTaken) {
+                    AnswerCallbackQuery answerCallbackQuery = new AnswerCallbackQuery();
+                    answerCallbackQuery.setCallbackQueryId(callbackQuery.getId());
+                    answerCallbackQuery.setText("Order has been taken already!");
+                    answerCallbackQuery.setShowAlert(true);
+                    try {
+                        execute(answerCallbackQuery);
+                    } catch (TelegramApiException e) {
+                        e.printStackTrace();
+                    }
+                } else {
+                    try {
+                        Database.Update.updateOrderCourier(
+                                connectionPool.getConnection(),
+                                orderId,
+                                callbackQuery.getMessage().getChatId()
+                        );
+                        Database.Update.updateOrderStatus(
+                                connectionPool.getConnection(),
+                                orderId,
+                                STATUS_TAKEN
+                        );
+                    } catch (SQLException sqlE) {
+                        System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+                        sqlE.printStackTrace();
+                    }
+                }
+
+            }
+        }
+    }
+
     //handle users states
     private void stateHandler(Update update) {
+        /*
+        TODO
+            split states into classes and  divide responsibility between them
+            more abstract classes and more abstract methods
+         */
         int state = usersState.get(update.getMessage().getChatId());
         System.out.println(update.getMessage().getChat().getUserName());
         System.out.println(state);
@@ -107,7 +193,7 @@ public class Bot extends TelegramLongPollingBot {
                     break;
             }
 
-        else if(state == 5)
+        else if (state == 5)
             switch (update.getMessage().getText()) {
                 case "All orders":
                     viewAllOrders(update);
@@ -120,15 +206,15 @@ public class Bot extends TelegramLongPollingBot {
                     break;
             }
 
-        else if(state == 7)
-            if(isValidId(update))
+        else if (state == 7)
+            if (isValidId(update))
                 orderId = Integer.parseInt(update.getMessage().getText());
             else {
                 sendInvalidInputMessage(update, "Invalid id.");
                 return;
             }
 
-        else if(state == 8)
+        else if (state == 8)
             if (isValidPrice(update))
                 newPrice = Integer.parseInt(update.getMessage().getText());
             else {
@@ -181,27 +267,29 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //state 3 -> 1
-    private void addOrder(Update update){
+    private void addOrder(Update update) {
         String order = update.getMessage().getText();
         boolean success = false;
         try {
             long s = System.currentTimeMillis();
-            success = Insert.insertNewOrder(connectionPool.getConnection(), order);
-            System.out.println("Added in: "  + (System.currentTimeMillis() - s));
+            long orderId = Insert.insertNewOrder(connectionPool.getConnection(), order);
+            if (orderId > 0)
+                success = true;
+            System.out.println("Added in: " + (System.currentTimeMillis() - s));
         } catch (SQLException sqlE) {
             System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
         }
         SendMessage message = new SendMessage();
         message.setChatId(update.getMessage().getChatId().toString());
-        if(success)
+        if (success)
             message.setText("Order added.");
         else
             message.setText("Something went wrong.");
 
         try {
             execute(message);
-            if(success)
-                notifyCouriers(update, order);
+            if (success)
+                notifyCouriers(update, order, orderId);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
@@ -228,10 +316,10 @@ public class Bot extends TelegramLongPollingBot {
         message.setReplyMarkup(ordersMessageRKM);
 
         //execute message
-        try{
+        try {
             execute(message);
             usersState.replace(update.getMessage().getChatId(), 5);
-        } catch (TelegramApiException e){
+        } catch (TelegramApiException e) {
             e.printStackTrace();
         }
 
@@ -248,7 +336,7 @@ public class Bot extends TelegramLongPollingBot {
         message.setChatId(update.getMessage().getChatId().toString());
         message.setText("Enter order id:");
 
-        try{
+        try {
             execute(message);
             usersState.replace(update.getMessage().getChatId(), 7);
         } catch (TelegramApiException e) {
@@ -259,19 +347,26 @@ public class Bot extends TelegramLongPollingBot {
     //state 7 -> 8
     private void askNewPrice(Update update) {
         SendMessage message = new SendMessage();
-        message.setChatId(update.getMessage().getChatId().toString());
+        long chatId;
+        if(update.hasMessage())
+            chatId = update.getMessage().getChatId();
+        else if(update.hasCallbackQuery())
+            chatId = update.getCallbackQuery().getMessage().getChatId();
+        else
+            throw new NullPointerException("Update has no Message nor CallbackQuery");
+        message.setChatId(chatId);
         message.setText("Enter new price:");
 
-        try{
+        try {
             execute(message);
-            usersState.replace(update.getMessage().getChatId(), 8);
+            usersState.replace(chatId, 8);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
     }
 
     //state 8 -> 1
-    private void showNewPriceMessage(Update update, boolean updateSuccess){
+    private void showNewPriceMessage(Update update, boolean updateSuccess) {
         String message;
         if (updateSuccess)
             message = "Price updated. Price: " + newPrice + " ID: " + orderId;
@@ -326,7 +421,7 @@ public class Bot extends TelegramLongPollingBot {
 
     //view orders methods---------------------------------------------------
     private void viewAllOrders(Update update) {
-        List<String> orders = new ArrayList<>();
+        List<String> orders = null;
         try {
             //get orders from db
             orders = Select.selectAllOrders(connectionPool.getConnection());
@@ -335,7 +430,43 @@ public class Bot extends TelegramLongPollingBot {
             sqlE.printStackTrace();
         }
 
-        //send each order as a message
+        if(orders != null)
+            sendOrders(update, orders);
+    }
+
+    private void viewMyOrders(Update update) {
+        List<String> orders = null;
+        try {
+            //get orders from db
+            orders = Select.selectMyOrders(
+                    connectionPool.getConnection(),
+                    update.getMessage().getChatId()
+            );
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+        }
+
+        if(orders != null)
+            sendOrders(update, orders);
+    }
+
+    private void viewUncheckedOrders(Update update) {
+        List<String> orders = null;
+        try {
+            //get orders from db
+            orders = Select.selectUncheckedOrders(connectionPool.getConnection());
+        } catch (SQLException sqlE) {
+            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
+            sqlE.printStackTrace();
+        }
+
+        if( orders != null)
+            sendOrders(update, orders);
+    }
+
+    //send each order as a message
+    private void sendOrders(Update update, List<String> orders) {
         for (String order : orders) {
             SendMessage message = new SendMessage();
             message.setChatId(update.getMessage().getChatId().toString());
@@ -348,65 +479,41 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    private void viewMyOrders(Update update) {
-        /*
-        TODO
-            Show list of my orders
-         */
-        SendMessage message = new SendMessage();
-        message.setChatId(update.getMessage().getChatId().toString());
-        message.setText("My orders.");
-        try{
-            execute(message);
-        } catch (TelegramApiException e) {
-            e.printStackTrace();
-        }
-    }
-    private void viewUncheckedOrders(Update update) {
-        /*
-        TODO
-            Show list of unchecked orders
-         */
-        SendMessage message = new SendMessage();
-        message.setChatId(update.getMessage().getChatId().toString());
-        message.setText("Unchecked orders.");
-        try{
-            execute(message);
-        } catch (TelegramApiException e) {
-            e.printStackTrace();
-        }
-    }
+
     //----------------------------------------------------------------------
 
     //Notifying couriers that new order has been placed
-    private void notifyCouriers(Update update, String order) {
-        List<Long> ids = new ArrayList<>();
-        try {
-            ids = Select.selectAllCouriers(connectionPool.getConnection());
-        } catch (SQLException sqlE) {
-            System.err.format("SQL State: %s\n%s", sqlE.getSQLState(), sqlE.getMessage());
-            sqlE.printStackTrace();
-            sendInvalidInputMessage(update, "Something went wrong");
-        }
-        for(Long id : ids) {
+    private void notifyCouriers(Update update, String order, long orderId) {
+
+        for (Long id : userInfo.keySet()) {
+            //build message
+            SendMessage message = new SendMessage();
+            message.setChatId(id);
+            message.setText(
+                    "New order.\nID: " + orderId +
+                            "\nOrder:\n" + order);
+
+            //build inline keyboard
+            InlineKeyboardMarkup ikm = new InlineKeyboardMarkup();
+            List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+            List<InlineKeyboardButton> buttons = new ArrayList<>();
+
+            InlineKeyboardButton buttonTake = new InlineKeyboardButton();
+            InlineKeyboardButton buttonAddPrice = new InlineKeyboardButton();
+
+            buttonTake.setText("Take");
+            buttonAddPrice.setText("Add price");
+
+            buttonTake.setCallbackData("order:take:" + orderId);
+            buttonAddPrice.setCallbackData("order:price:" + orderId);
+
+            buttons.add(buttonTake);
+            buttons.add(buttonAddPrice);
+            rows.add(buttons);
+            ikm.setKeyboard(rows);
+            message.setReplyMarkup(ikm);
+
             try {
-                //build message
-                SendMessage message = new SendMessage();
-                message.setChatId(id);
-                message.setText("New order:\n" + order);
-
-                //build keyboard
-                InlineKeyboardMarkup ikm = new InlineKeyboardMarkup();
-                List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-                List<InlineKeyboardButton> buttons = new ArrayList<>();
-                InlineKeyboardButton butt = new InlineKeyboardButton();
-                butt.setText("Take");
-                butt.setCallbackData("order:take");
-                buttons.add(butt);
-                rows.add(buttons);
-                ikm.setKeyboard(rows);
-                message.setReplyMarkup(ikm);
-
                 //execute
                 execute(message);
             } catch (TelegramApiException e) {
@@ -417,7 +524,7 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     //update price in db
-    private boolean updatePrice(Update update, int orderId, int newPrice){
+    private boolean updatePrice(Update update, int orderId, int newPrice) {
         try {
             return Database.Update.updatePrice(connectionPool.getConnection(), orderId, newPrice);
         } catch (SQLException sqlE) {
@@ -427,21 +534,30 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
+    private void sendTakeOrderMessage(Update update) {
+        /*
+        TODO
+            message that is sent after order is taken by one of the couriers
+         */
+        SendMessage message = new SendMessage();
+        //message.setChatId();
+    }
+
     //input validation methods----------------------------------------------
-    private boolean isValidPrice(Update update){
-        try{
+    private boolean isValidPrice(Update update) {
+        try {
             Integer.parseInt(update.getMessage().getText());
             return true;
-        } catch (NumberFormatException e){
+        } catch (NumberFormatException e) {
             return false;
         }
     }
 
-    private boolean isValidId(Update update){
-        try{
+    private boolean isValidId(Update update) {
+        try {
             long id = Long.parseLong(update.getMessage().getText());
             return Select.isIdInOrderTable(connectionPool.getConnection(), id);
-        } catch (NumberFormatException | SQLException e){
+        } catch (NumberFormatException | SQLException e) {
             return false;
         }
     }
